@@ -1,0 +1,185 @@
+---
+title: "Human Activity Data - Weight Lifting"
+author: "Gaurav Chaturvedi"
+date: "Saturday, July 25, 2015"
+output: html_document
+---
+
+## Summary
+
+The objective of this exercise was to develop a machine learning algorithm to predict quality of execution of a barbell lift (split in 5 classes).  
+
+Of the 160 features, only 52 predictors were ultimately used as the rest had majority of NA values. Predictors related to users and timestamp were also ignored. Principal Component Analysis was used to pre-process the data. 
+
+Two machine learning algorithms were tried - Classification Trees and Randon Forest. Classification Trees had a poor accuracy (~ 40%) whereas Random Forest had higher accuracy of 98%. However it must be noted that Random Forest was comparatively much slower. 
+
+Random Forest algorithm was used to predict on the validation set.
+
+
+## Study Design 
+
+We have been provided a training set with 19622 observations and a validation set with 20 observations. 
+
+For building the Machine Learning algorithm, the training set has been further split into training (70%) and testing (30%). 
+
+## Data Reading 
+
+Data is read and further sub-divided into training and testing. 
+
+```{r read, echo=TRUE, message=FALSE, warning=FALSE}
+
+library(caret)
+library(rattle)
+library(randomForest)
+
+iotdata <- read.csv("../Data/pml-training.csv", header=TRUE)
+inTrain <- createDataPartition(y=iotdata$classe, p=0.7, list=FALSE)
+training <- iotdata[inTrain,]
+testing <- iotdata[-inTrain,]
+```
+
+## Feature Clean-up 
+
+The following clean-up is done 
+1. Remove the user and timestamp related variables. Assumption here is that user level differences are not material since all repetitions have been supervised by an expert 
+
+2. Some numerci features are read as factors due to presence of #div0 error. So converting back to numeric
+
+3. A lot of features have a lot of NA values (>80% values are NA). These features have to be removed 
+
+```{r cln, echo=TRUE, message=FALSE, warning=FALSE}
+
+## 1. remove the user and timestamp variables from training data set
+trainoutcome <- training$classe # capture outcome before removing it
+training <- training[,-c(1:7, 160)] # remove useless vars and outcome
+
+ ## Convert factors to numeric
+asNumeric <- function(x) as.numeric(as.character(x))
+factorsNumeric <- function(d) modifyList(d, lapply(d[, sapply(d, is.factor)],                                     asNumeric))
+training <- factorsNumeric(training)
+
+## Remove Cols with high number of NAs (>80% NAs)
+na_count <-sapply(training, function(y) sum(length(which(is.na(y)))))
+na_count <- data.frame(na_count)
+disccols <- row.names(na_count[na_count$na_count > 0.8*nrow(training),,drop=FALSE])
+training <- training[ , -which(names(training) %in% disccols)] # remove cols with mostly NAs
+```
+
+Outcome - We are now left with `r ncol(training)` of the 160 features 
+
+## Covariate Creation
+
+We do the following steps to create covariates:
+
+1. Check for near zero vars 
+
+```{r covcr, echo=TRUE, message=FALSE, warning=FALSE, results="hide"}
+
+## Check for near Zero Vars
+nsv <- nearZeroVar(training, saveMetrics=TRUE) 
+nsv
+```
+
+There are no variables with near zero variation (results hidden as very long).
+
+2. Check for highly co-related variables 
+
+```{r corvar, echo=TRUE, message=FALSE, warning=FALSE, results="hide"}
+## Check for high correlation
+M <- abs(cor(training[,-c(1:7,160)]))
+diag(M) <- 0
+which(M>0, arr.ind=T)
+```
+
+There are pairs with high correlation (results hidden as very long).
+So PCA can be used to reduce # vars 
+
+## Preprocessing with PCA 
+
+```{r preproc1, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Apply PCA
+preProc <- preProcess(training, method="pca", thresh=0.90)
+preProc
+```
+
+We now have the preProc varaible with the principal components. We use this for model fitment.
+
+## Model Fitment 
+
+I try two models -> Classification Trees (rpart) and Random Forest (RF). 
+
+```{r modfitpr, echo=TRUE, message=FALSE, warning=FALSE}
+trainPC <- predict(preProc, training)
+training$classe <- trainoutcome
+```
+
+### Classification Trees 
+```{r modfit1, echo=TRUE, message=FALSE, warning=FALSE}
+modFit1 <- train(training$classe ~ ., method = "rpart", data=trainPC)
+fancyRpartPlot(modFit1$finalModel)
+modFit1$results
+```
+
+As we can see the accuracy of the classification tree on training set is very low. We expect the accuracy to be lower on the testing set. Hence we discard this algorithm.
+
+### Random Forest
+```{r modfit2, echo=TRUE, message=FALSE, warning=FALSE, cache =FALSE}
+#modFit2 <- train(training$classe ~ ., method = "rf", data=trainPC)
+modFit2 <- randomForest(y=training$classe, x = trainPC, ntree=1000)
+p1 <- predict(modFit2, newdata=trainPC)
+confusionMatrix(training$classe, p1)
+```
+
+The accuracy of RF algoithm on training set is very high. We cross validate this with the testing set. 
+
+The variable importance plot is below:
+```{r modfit3, echo=TRUE, message=FALSE, warning=FALSE, cache =FALSE}
+varImpPlot(modFit2,)
+```
+
+## Model Evaluation 
+
+```{r modeval1, echo=TRUE, message=FALSE, warning=FALSE}
+testoutcome <- testing$classe # capture test outcome before removing it
+testing <- testing[,-c(1:7, 160)] # remove useless vars and outcome
+testing <- testing[ , -which(names(testing) %in% disccols)] # remove cols with mostly NAs in training set
+
+testPC <- predict(preProc, testing)
+testing$classe <- testoutcome
+```
+
+### Random Forest 
+```{r modeval2, echo=TRUE, message=FALSE, warning=FALSE}
+p2 <- predict(modFit2, newdata=testPC)
+confusionMatrix(testing$classe, p2)
+```
+
+The accuracy of RF on the testing set is very high. We expect OOS accuracy to be around 98%.
+
+## Conclusion - Outcome on the validation set 
+
+Random Forest algorithm has high accuracy on the testing and training set. 
+
+I use this algorithm to find answers to the 20 observations in the validation set and submit for grading !
+
+```{r concl, echo=TRUE, message=FALSE, warning=FALSE}
+
+validation = read.csv("../Data/pml-testing.csv", header=TRUE)
+
+# Perform the transformation operations on this set 
+
+valoutcome <- validation$classe # capture test outcome before removing it
+validation <- validation[,-c(1:7, 160)] # remove useless vars and outcome
+validation <- validation[ , -which(names(validation) %in% disccols)] # remove cols with mostly NAs in training set
+
+# PCA on the validation setusing preProc object from training set 
+validationPC <- predict(preProc, validation)
+validation$classe <- valoutcome
+
+p2 <- predict(modFit2, newdata=validationPC)
+
+```
+
+
+
